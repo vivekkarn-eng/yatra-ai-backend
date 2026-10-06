@@ -26,10 +26,9 @@ const ai = new GoogleGenAI({
 // ============================================================
 
 const YATRA_PLACES = [
-
-  // ----------------------------------------------------------
+  // ==========================================================
   // INDORE
-  // ----------------------------------------------------------
+  // ==========================================================
 
   "Rajwada, Indore",
   "Lal Bagh Palace, Indore",
@@ -42,9 +41,9 @@ const YATRA_PLACES = [
   "Ralamandal Wildlife Sanctuary, Indore",
   "Pipliyapala Regional Park, Indore",
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // JAIPUR
-  // ----------------------------------------------------------
+  // ==========================================================
 
   "Hawa Mahal, Jaipur",
   "Amber Fort, Jaipur",
@@ -57,9 +56,9 @@ const YATRA_PLACES = [
   "Galtaji Temple, Jaipur",
   "Birla Mandir Jaipur, Jaipur",
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // MUMBAI
-  // ----------------------------------------------------------
+  // ==========================================================
 
   "Gateway of India, Mumbai",
   "Chhatrapati Shivaji Maharaj Terminus, Mumbai",
@@ -72,9 +71,9 @@ const YATRA_PLACES = [
   "Sanjay Gandhi National Park, Mumbai",
   "Marine Drive, Mumbai",
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // MYSURU
-  // ----------------------------------------------------------
+  // ==========================================================
 
   "Mysore Palace, Mysuru",
   "Chamundi Hill, Mysuru",
@@ -87,9 +86,9 @@ const YATRA_PLACES = [
   "Lalitha Mahal Palace, Mysuru",
   "Mysuru Zoo, Mysuru",
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // BHOPAL
-  // ----------------------------------------------------------
+  // ==========================================================
 
   "Taj-ul-Masajid, Bhopal",
   "Upper Lake, Bhopal",
@@ -101,7 +100,184 @@ const YATRA_PLACES = [
   "Sadar Manzil, Bhopal",
   "Birla Mandir Bhopal, Bhopal",
   "Regional Science Centre Bhopal, Bhopal",
+
+  // ==========================================================
+  // OTHER MAJOR HERITAGE PLACES
+  // ==========================================================
+
+  "Khajuraho Temples, Khajuraho",
+  "Taj Mahal, Agra",
+  "Red Fort, Delhi",
+  "Charminar, Hyderabad",
+  "Sanchi Stupa, Sanchi",
 ];
+
+// ============================================================
+// NORMALIZE TEXT FOR RELIABLE MATCHING
+// ============================================================
+
+function normalizeText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// ============================================================
+// EXTRACT PLACE NAME FROM GEMINI RESULT
+// ============================================================
+
+function extractAiPlaceName(rawName) {
+  let name = String(rawName || "").trim();
+
+  // Remove common prefixes Gemini may add.
+  name = name.replace(/^the\s+/i, "");
+
+  // Gemini sometimes returns:
+  // "Gateway of India, Mumbai"
+  // "Gateway of India, Mumbai, Maharashtra"
+  //
+  // The supported YATRA name is the first part.
+  if (name.includes(",")) {
+    name = name.split(",")[0].trim();
+  }
+
+  return name;
+}
+
+// ============================================================
+// FIND MATCHED YATRA PLACE
+// ============================================================
+
+function findMatchedPlace(result) {
+  const rawName = String(result?.name || "").trim();
+  const rawCity = String(result?.city || "").trim();
+
+  if (!rawName) {
+    return null;
+  }
+
+  const aiName = normalizeText(rawName);
+  const aiCity = normalizeText(rawCity);
+
+  // ----------------------------------------------------------
+  // First attempt:
+  // Exact/strong name + city matching
+  // ----------------------------------------------------------
+
+  for (const place of YATRA_PLACES) {
+    const parts = place.split(",");
+
+    const supportedName = normalizeText(parts[0]);
+
+    const supportedCity = normalizeText(
+      parts.slice(1).join(",")
+    );
+
+    const nameMatches =
+      aiName === supportedName ||
+      aiName.includes(supportedName) ||
+      supportedName.includes(aiName);
+
+    const cityMatches =
+      !aiCity ||
+      aiCity === supportedCity ||
+      aiCity.includes(supportedCity) ||
+      supportedCity.includes(aiCity);
+
+    if (nameMatches && cityMatches) {
+      return place;
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Second attempt:
+  // Extract the monument name before any comma.
+  //
+  // Example:
+  // "Gateway of India, Mumbai"
+  // becomes:
+  // "Gateway of India"
+  // ----------------------------------------------------------
+
+  const extractedName = normalizeText(
+    extractAiPlaceName(rawName)
+  );
+
+  if (extractedName) {
+    for (const place of YATRA_PLACES) {
+      const supportedName = normalizeText(
+        place.split(",")[0]
+      );
+
+      if (
+        extractedName === supportedName ||
+        extractedName.includes(supportedName) ||
+        supportedName.includes(extractedName)
+      ) {
+        return place;
+      }
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Third attempt:
+  // Compare important words in the name.
+  //
+  // This helps with small naming variations such as:
+  // "Gateway of India Monument"
+  // "Gateway of India"
+  // "The Gateway of India"
+  // ----------------------------------------------------------
+
+  const aiWords = new Set(
+    normalizeText(extractedName || rawName)
+      .split(" ")
+      .filter((word) => word.length > 2)
+  );
+
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const place of YATRA_PLACES) {
+    const supportedName = normalizeText(
+      place.split(",")[0]
+    );
+
+    const supportedWords = supportedName
+      .split(" ")
+      .filter((word) => word.length > 2);
+
+    if (supportedWords.length === 0) {
+      continue;
+    }
+
+    let matchedWords = 0;
+
+    for (const word of supportedWords) {
+      if (aiWords.has(word)) {
+        matchedWords++;
+      }
+    }
+
+    const score =
+      matchedWords / supportedWords.length;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = place;
+    }
+  }
+
+  // Require a strong word-level match.
+  if (bestMatch && bestScore >= 0.7) {
+    return bestMatch;
+  }
+
+  return null;
+}
 
 // ============================================================
 // TEST ROUTE
@@ -208,7 +384,7 @@ app.post("/recognize-place", async (req, res) => {
     const { imageBase64, mimeType } = req.body;
 
     console.log("=================================");
-    console.log("YATRA AI image recognition request");
+    console.log("YATRA AI IMAGE RECOGNITION");
     console.log("=================================");
 
     if (!imageBase64) {
@@ -223,30 +399,87 @@ app.post("/recognize-place", async (req, res) => {
       });
     }
 
+    // ----------------------------------------------------------
+    // Give Gemini the complete YATRA place list
+    // ----------------------------------------------------------
+
     const supportedPlacesText = YATRA_PLACES
       .map((place) => `- ${place}`)
       .join("\n");
 
     const prompt = `
-You are YATRA AI, an Indian heritage and tourism recognition assistant.
+You are YATRA AI, an Indian heritage monument recognition system.
 
-Look carefully at the supplied image.
+Your task is to identify the monument or landmark shown in the supplied image.
 
-Your job is to identify whether the image shows one of the places supported by YATRA.
+IMPORTANT:
+You MUST compare the image against the YATRA supported-place list below.
 
-YATRA currently supports these places:
+YATRA SUPPORTED PLACES:
 
 ${supportedPlacesText}
 
-IMPORTANT:
-- Compare the visual features of the image carefully with the supported places.
-- Prefer a supported place ONLY when the image genuinely matches.
-- Do not invent a place name.
-- Do not return a place that is not in the supported list.
-- If the image does not clearly match a supported place, return "Unknown place".
-- If the image is unclear, use a lower confidence value.
+RECOGNITION INSTRUCTIONS:
 
-Return ONLY valid JSON in exactly this format:
+1. Carefully inspect the entire image.
+2. Look at architecture, facade, domes, towers, arches, windows,
+   colors, structure, surroundings and other distinctive visual features.
+3. Identify the most likely supported YATRA place.
+4. Prefer a supported place when the visual evidence genuinely
+   supports it.
+5. Do NOT invent a place outside the supported list.
+6. If the image clearly matches a supported place, return that place.
+7. If the image is genuinely unclear or does not match any supported
+   place, return "Unknown place".
+8. Use a confidence value between 0 and 1.
+9. Confidence should represent your visual certainty.
+10. Do not return explanations.
+
+IMPORTANT OUTPUT RULE:
+
+The "name" field should contain ONLY the monument/place name.
+
+DO NOT put the city inside the "name" field.
+
+For example:
+
+CORRECT:
+{
+  "name": "Gateway of India",
+  "city": "Mumbai",
+  "state": "Maharashtra",
+  "confidence": 0.99
+}
+
+NOT PREFERRED:
+{
+  "name": "Gateway of India, Mumbai",
+  "city": "Mumbai",
+  "state": "Maharashtra",
+  "confidence": 0.99
+}
+
+Another example:
+
+{
+  "name": "Taj Mahal",
+  "city": "Agra",
+  "state": "Uttar Pradesh",
+  "confidence": 0.95
+}
+
+If the image is Hawa Mahal:
+
+{
+  "name": "Hawa Mahal",
+  "city": "Jaipur",
+  "state": "Rajasthan",
+  "confidence": 0.95
+}
+
+Return ONLY valid JSON.
+
+Format:
 
 {
   "name": "Place name",
@@ -255,7 +488,7 @@ Return ONLY valid JSON in exactly this format:
   "confidence": 0.00
 }
 
-For an unsupported or unclear image, return:
+If the image cannot be identified:
 
 {
   "name": "Unknown place",
@@ -263,13 +496,6 @@ For an unsupported or unclear image, return:
   "state": "",
   "confidence": 0.00
 }
-
-Rules:
-- confidence must be a number between 0 and 1.
-- Do not include markdown.
-- Do not include explanations.
-- The "name" must exactly match one of the supported place names above OR be "Unknown place".
-- The city must correspond to the selected supported place.
 `;
 
     console.log("Sending image to Gemini...");
@@ -295,28 +521,45 @@ Rules:
     let resultText = response.text?.trim();
 
     if (!resultText) {
-      throw new Error("Gemini returned an empty response.");
+      throw new Error(
+        "Gemini returned an empty response."
+      );
     }
 
-    // Remove markdown code fences if Gemini adds them.
+    // ----------------------------------------------------------
+    // Clean Gemini JSON response
+    // ----------------------------------------------------------
+
     resultText = resultText
       .replace(/^```json\s*/i, "")
       .replace(/^```\s*/i, "")
       .replace(/```\s*$/i, "")
       .trim();
 
+    console.log("Gemini raw result:");
+    console.log(resultText);
+
     const result = JSON.parse(resultText);
 
-    // ========================================================
-    // VALIDATE AI RESULT
-    // ========================================================
+    // ----------------------------------------------------------
+    // Basic validation
+    // ----------------------------------------------------------
 
     if (!result.name) {
-      throw new Error("AI response did not contain a place name.");
+      throw new Error(
+        "AI response did not contain a place name."
+      );
     }
 
-    // Unknown place is valid.
-    if (result.name === "Unknown place") {
+    // ----------------------------------------------------------
+    // Unknown place
+    // ----------------------------------------------------------
+
+    if (
+      String(result.name)
+        .trim()
+        .toLowerCase() === "unknown place"
+    ) {
       return res.status(200).json({
         name: "Unknown place",
         city: "",
@@ -325,13 +568,19 @@ Rules:
       });
     }
 
-    // Make sure AI returned a supported place.
-    const matchedPlace = YATRA_PLACES.find(
-      (place) => place === `${result.name}, ${result.city}`
-    );
+    // ----------------------------------------------------------
+    // MATCH AGAINST ALL 55 YATRA PLACES
+    // ----------------------------------------------------------
+
+    const matchedPlace = findMatchedPlace(result);
+
+    // ----------------------------------------------------------
+    // Unsupported result
+    // ----------------------------------------------------------
 
     if (!matchedPlace) {
-      console.log("Unsupported AI result:", result);
+      console.log("⚠️ Unsupported AI result:");
+      console.log(result);
 
       return res.status(200).json({
         name: "Unknown place",
@@ -341,7 +590,23 @@ Rules:
       });
     }
 
-    // Normalize confidence.
+    // ----------------------------------------------------------
+    // Get official YATRA name and city
+    // ----------------------------------------------------------
+
+    const matchedParts = matchedPlace.split(",");
+
+    const finalName = matchedParts[0].trim();
+
+    const finalCity = matchedParts
+      .slice(1)
+      .join(",")
+      .trim();
+
+    // ----------------------------------------------------------
+    // Normalize confidence
+    // ----------------------------------------------------------
+
     let confidence = Number(result.confidence);
 
     if (!Number.isFinite(confidence)) {
@@ -353,22 +618,33 @@ Rules:
       Math.min(1, confidence)
     );
 
+    // ----------------------------------------------------------
+    // Final result
+    // ----------------------------------------------------------
+
     const finalResult = {
-      name: result.name,
-      city: result.city,
-      state: result.state,
+      name: finalName,
+      city: finalCity,
+      state: result.state || "",
       confidence: confidence,
     };
 
-    console.log("Recognized place:", finalResult);
+    console.log("=================================");
+    console.log("✅ YATRA RECOGNIZED:");
+    console.log(finalResult);
+    console.log("=================================");
 
     res.status(200).json(finalResult);
 
   } catch (error) {
     console.error("");
-    console.error("========== RECOGNITION ERROR ==========");
+    console.error(
+      "========== RECOGNITION ERROR =========="
+    );
     console.error(error);
-    console.error("=======================================");
+    console.error(
+      "======================================="
+    );
     console.error("");
 
     res.status(500).json({
@@ -382,17 +658,19 @@ Rules:
 // START SERVER
 // ============================================================
 
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
 app.listen(PORT, () => {
   console.log("");
   console.log("=================================");
   console.log("YATRA AI backend is running!");
   console.log(`http://localhost:${PORT}`);
-  console.log(`Supported places: ${YATRA_PLACES.length}`);
+  console.log(
+    `Supported places: ${YATRA_PLACES.length}`
+  );
   console.log("=================================");
   console.log("");
 });
 
-// Keep Node process alive.
+// Keep Node process alive
 process.stdin.resume();
